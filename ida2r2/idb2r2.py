@@ -18,10 +18,14 @@ def idb2r2_comments(api, textseg):
 
 def idb2r2_functions(api):
     for ea in api.idautils.Functions():
-        print("af " + api.idc.GetFunctionName(ea) + " @ " + str(ea))
+        # just pull out text section functions for now
+        if (api.idc.SegName(ea) == '.text'):
+            print("af %s @ %s" % (api.idc.GetFunctionName(ea), hex(ea)))
 
 with idb.from_file(sys.argv[1]) as db:
     api = idb.IDAPython(db)
+    # perform analysis prior to function import
+    print('aaaa') 
     idb2r2_functions(api)
     segs = idb.analysis.Segments(db).segments
     for segment in segs.values():
