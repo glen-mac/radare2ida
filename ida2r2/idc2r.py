@@ -6,7 +6,7 @@ import re
 import sys
 
 class Func(object):
-# FIXME: parse ftype into params and values
+	# FIXME: parse ftype into params and values
 	def __init__(self, name="unknown", params=[], values=[], address=0, size=0, ftype=""):
 		self.name = name
 		self.params = params
@@ -24,6 +24,13 @@ class Comm(object):
 	def __init__(self, text="", address=0):
 		self.text = text
 		self.address = address
+
+class Segment(object):
+	def __init__(self, name="unknown", address=0, size=0, stype=""):
+		self.name = name
+		self.address = address
+		self.size = size
+		self.stype = stype
 
 class Enum(object):
 	def __init__(self, name="unknown", members=[]):
@@ -53,12 +60,13 @@ comments = []
 structs = []
 enums = []
 types = []
+segments = []
 
 def functions_parse(idc):
 
 	# MakeFunction (0XF3C99,0XF3CA8);
 	mkfun_re = re.compile("""
-		(?m)								# Multiline
+		(?m)					# Multiline
 		^[ \t]*MakeFunction[ \t]*\(
 		(?P<fstart>0[xX][\dA-Fa-f]{1,8})	# Function start
 		[ \t]*\,[ \t]*
@@ -146,11 +154,10 @@ def functions_parse(idc):
 	# MakeNameEx (0xF3CA0, "return", SN_LOCAL);
 	mklocal_re = re.compile("""
 		(?m)								# Multiline
-		^[ \t]*MakeNameEx[ \t]*\(
+		^[ \t]*MakeName[ \t]*\(
 		(?P<laddr>0[xX][\dA-Fa-f]{1,8})		# Local label address
 		[ \t]*\,[ \t]*
 		"(?P<lname>.*)"						# Local label name
-		[ \t]*\,[ \t]*SN_LOCAL
 		[ \t]*\);[ \t]*$
 	""", re.VERBOSE)
 	mklocal_group_name = dict([(v,k) for k,v in mklocal_re.groupindex.items()])
@@ -207,8 +214,80 @@ def structs_parse(idc):
 		[ \t]*\);[ \t]*$
 	""", re.VERBOSE)
 
-# ----------------------------------------------------------------------
+	# ----------------------------------------------------------------------
 
+
+def segments_parse(idc):
+	#SegCreate(0X80485EC,0X804860F,0X1,1,5,2);
+	mksegbound_re = re.compile("""
+		(?m)						# Multiline
+		^[ \t]*SegCreate[ \t]*\(
+		(?P<saddrSt>0[xX][\dA-Fa-f]{1,8})		# Segment Start address
+		[ \t]*\,[ \t]*
+		(?P<saddrEn>0[xX][\dA-Fa-f]{1,8})		# Segment End Address
+		[ \t]*\,[ \t]*0[xX][\dA-Fa-f]{1,3}
+		[ \t]*\,[ \t]*[0-9]+
+		[ \t]*\,[ \t]*[0-9]+
+		[ \t]*\,[ \t]*[0-9]+
+		[ \t]*\);[ \t]*$
+	""", re.VERBOSE)
+	mksegbound_group_name = dict([(v,k) for k,v in mksegbound_re.groupindex.items()])
+	mksegbound = mksegbound_re.finditer(idc)
+	for match in mksegbound :
+		seg = Segment()
+		for group_index,group in enumerate(match.groups()) :
+			if group :
+				if mksegbound_group_name[group_index+1] == "saddrSt" :
+					seg.address = int(group, 16)
+				if mksegbound_group_name[group_index+1] == "saddrEn" :
+					seg.size = int(group, 16) - seg.address
+					segments.append(seg)
+
+
+	#SegRename(0X80485EC,".init");
+	mksegname_re = re.compile("""
+		(?m)						# Multiline
+		^[ \t]*SegRename[ \t]*\(
+		(?P<saddrSt>0[xX][\dA-Fa-f]{1,8})		# Segment Start address
+		[ \t]*\,[ \t]*
+		"(?P<saddrNa>.*)"				# Segment Name
+		[ \t]*\);[ \t]*$
+	""", re.VERBOSE)
+	mksegname_group_name = dict([(v,k) for k,v in mksegname_re.groupindex.items()])
+	mksegname = mksegname_re.finditer(idc)
+	for match in mksegname :
+		for group_index,group in enumerate(match.groups()) :
+			if group :
+				if mksegname_group_name[group_index+1] == "saddrSt" :
+					address = int(group, 16)
+				if mksegname_group_name[group_index+1] == "saddrNa" :
+					for seg in segments:
+						if seg.address == address:
+							seg.name = group
+
+	#SegClass (0X80485EC,"CODE");
+	mksegtype_re = re.compile("""
+		(?m)						# Multiline
+		^[ \t]*SegClass[ \t]*\(
+		(?P<saddrSt>0[xX][\dA-Fa-f]{1,8})		# Segment Start address
+		[ \t]*\,[ \t]*
+		"(?P<saddrTy>.*)"				# Segment Class
+		[ \t]*\);[ \t]*$
+	""", re.VERBOSE)
+	mksegtype_group_name = dict([(v,k) for k,v in mksegtype_re.groupindex.items()])
+	mksegtype = mksegtype_re.finditer(idc)
+	for match in mksegtype :
+		for group_index,group in enumerate(match.groups()) :
+			if group :
+				if mksegtype_group_name[group_index+1] == "saddrSt" :
+					address = int(group, 16)
+				if mksegtype_group_name[group_index+1] == "saddrTy" :
+					for seg in segments:
+						if seg.address == address:
+							seg.stype = group
+
+
+# ----------------------------------------------------------------------
 def comments_parse(idc):
 	# MakeComm (0XFED3D, "PCI class 0x600 - Host/PCI bridge");
 	mkcomm_re = re.compile("""
@@ -239,25 +318,39 @@ def comments_parse(idc):
 #	print("af+ 0x%08lx %d %s" % (func.address, func.size, func.name))
 
 def generate_r2():
+	print("aaaa")
+	import_functions = []
 	for f in functions :
-		if f.name != "unknown" :
-			print("af+ {0} {1} {2}".format(hex(f.address), f.size, f.name))
+		if f.name != "unknown":# 
+			if re.match(r'^\.', f.name):
+				import_functions.append(f.name[1:])
+				continue
+			else:
+				if f.name in import_functions:
+					continue
+			print("af {1} {0}".format(hex(f.address), f.name))
 			print("\"CCa {0} {1}\"".format(hex(f.address), f.ftype))
 
 	for l in llabels :
-		if l.name != "unknown" :
-			for f in functions :
-				if (l.address > f.address) and (l.address < (f.address + f.size)) :
-					print("f. {0} @ {1}".format(l.name, hex(l.address)))
+		if l.name != "unknown":
+			#l.name = l.name[1:] if re.match(r'^\.', l.name) else l.name
+			#for f in functions :
+			#	if (l.address < f.address) and (l.address > (f.address + f.size)) :
+			# afvn `pd 1 @ 0x08049a19|grep -oP '(local_[\da-zA-Z]{1,2})'` test
+			print("f sym.{0} @ {1}".format(l.name, hex(l.address)))
 
 	for c in comments :
 		if c.text != "" :
-			print("\"CCa {0} {1}\"".format(c.address, c.text))
+			print("\"CCa {0} {1}\"".format(hex(c.address), c.text))
+
+	#for seg in segments:
+	#	print("name:{0} start:{1} finish:{2} type:{3}".format(seg.name, hex(seg.address), hex(seg.address+seg.size), seg.stype))
 
 # ----------------------------------------------------------------------
 
 def idc_parse(idc):
 	enums_parse(idc)
+	segments_parse(idc)
 	structs_parse(idc)
 	functions_parse(idc)
 	comments_parse(idc)
@@ -271,4 +364,5 @@ if __name__ == "__main__":
 	#print(sys.argv[1])
 	idc_file = open(sys.argv[1], "r")
 	idc = idc_file.read()
+	idc = idc.replace('\r', '')
 	idc_parse(idc)
